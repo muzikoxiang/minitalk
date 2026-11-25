@@ -13,6 +13,13 @@
 #include <cctype>
 #include "unique_fd.h"
 #include <utility>
+#include <csignal>
+
+volatile std::sig_atomic_t g_stop = 0;
+
+void request_shutdown(int) {
+    g_stop = 1;
+}
 
 bool send_all(int fd, const char* data, std::size_t length) {
     std::size_t sent = 0;
@@ -145,7 +152,19 @@ int main(int argc, char* argv[]) {
     std::cout << "MiniTalk poll server listening on port "
               << port << '\n';
 
-    while (true) {
+    struct sigaction action {};
+    action.sa_handler = request_shutdown;
+
+    sigemptyset(&action.sa_mask);
+    action.sa_flags = 0;
+
+    if (sigaction(SIGINT, &action, nullptr) == -1 ||
+        sigaction(SIGTERM, &action, nullptr) == -1) {
+        std::perror("sigaction");
+        return 1;
+    }
+
+    while (!g_stop) {
         const int ready_count = poll(
             poll_fds.data(),
             static_cast<nfds_t>(poll_fds.size()),
@@ -325,12 +344,13 @@ int main(int argc, char* argv[]) {
                 poll_fds.erase(
                     poll_fds.begin() + static_cast<std::ptrdiff_t>(i)
                 );
-                
+
                 clients.erase(current_fd);
             } else {
                 ++i;
             }
         }
     }
+    std::cout << "\nMiniTalk server shutting down.\n";
     return 0;
 }
