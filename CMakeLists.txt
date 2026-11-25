@@ -18,3 +18,23 @@ target_compile_options(
     minitalk_epoll_server
     PRIVATE -Wall -Wextra -Wpedantic
 )
+
+find_path(MYSQLCPPCONN_INCLUDE_DIR mysql_driver.h REQUIRED)
+find_library(MYSQLCPPCONN_LIBRARY mysqlcppconn REQUIRED)
+
+add_executable(minitalk_db_demo src/db_demo.cpp)
+
+target_include_directories(
+    minitalk_db_demo
+    PRIVATE ${MYSQLCPPCONN_INCLUDE_DIR}
+)
+
+target_link_libraries(
+    minitalk_db_demo
+    PRIVATE ${MYSQLCPPCONN_LIBRARY}
+)
+
+target_compile_options(
+    minitalk_db_demo
+    PRIVATE -Wall -Wextra -Wpedantic
+)
