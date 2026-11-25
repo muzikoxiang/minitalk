@@ -22,7 +22,11 @@ target_compile_options(
 find_path(MYSQLCPPCONN_INCLUDE_DIR mysql_driver.h REQUIRED)
 find_library(MYSQLCPPCONN_LIBRARY mysqlcppconn REQUIRED)
 
-add_executable(minitalk_db_demo src/db_demo.cpp)
+add_executable(
+    minitalk_db_demo
+    src/db_demo.cpp
+    src/database.cpp
+)
 
 target_include_directories(
     minitalk_db_demo
