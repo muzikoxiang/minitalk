@@ -33,6 +33,11 @@ bool send_all(int fd, const char* data, std::size_t length) {
     return true;
 }
 
+struct ClientState {
+    std::string nickname;
+    std::string recv_buffer;
+};
+
 void broadcast_message(
     const std::vector<pollfd>& poll_fds,
     const std::string& message
@@ -104,8 +109,7 @@ int main(int argc, char* argv[]) {
     }
 
     std::vector<pollfd> poll_fds;
-    std::unordered_map<int, std::string> recv_buffers;
-    std::unordered_map<int, std::string> nicknames;
+    std::unordered_map<int, ClientState> clients;
     poll_fds.push_back({listen_fd, POLLIN, 0});
 
     std::cout << "MiniTalk poll server listening on port "
@@ -161,11 +165,14 @@ int main(int argc, char* argv[]) {
                                   << ", fd = " << client_fd << '\n';
 
                         poll_fds.push_back({client_fd, POLLIN, 0});
-                        recv_buffers[client_fd] = "";
-                        nicknames[client_fd] = "guest" + std::to_string(client_fd);
+                        clients[client_fd] = ClientState{
+                            "guest" + std::to_string(client_fd),
+                            ""
+                        };
+
                         broadcast_message(
                             poll_fds,
-                            "* " + nicknames[client_fd] + " joined the chat\n"
+                            "* " + clients.at(client_fd).nickname + " joined the chat\n"
                         );
                     }
                 }
@@ -183,7 +190,7 @@ int main(int argc, char* argv[]) {
                 );
 
                 if (received > 0) {
-                    std::string& pending = recv_buffers[current_fd];
+                    std::string& pending = clients.at(current_fd).recv_buffer;
 
                     pending.append(
                         buffer,
@@ -212,7 +219,7 @@ int main(int argc, char* argv[]) {
                        if (line == "/quit") {
                             broadcast_message(
                                 poll_fds,
-                                "* " + nicknames[current_fd] + " left the chat\n"
+                                "* " + clients.at(current_fd).nickname + " left the chat\n"
                             );
 
                             should_close = true;
@@ -230,8 +237,8 @@ int main(int argc, char* argv[]) {
                                 continue;
                             }
 
-                            const std::string old_nickname = nicknames[current_fd];
-                            nicknames[current_fd] = new_nickname;
+                            const std::string old_nickname = clients.at(current_fd).nickname;
+                            clients.at(current_fd).nickname = new_nickname;
 
                             broadcast_message(
                                 poll_fds,
@@ -243,7 +250,7 @@ int main(int argc, char* argv[]) {
                         }
 
                         const std::string message =
-                            "[" + nicknames[current_fd] + "] " + line + '\n';
+                            "[" + clients.at(current_fd).nickname + "] " + line + '\n';
 
                         broadcast_message(poll_fds, message);
                     }
@@ -263,8 +270,7 @@ int main(int argc, char* argv[]) {
 
             if (should_close) {
                 close(current_fd);
-                recv_buffers.erase(current_fd);
-                nicknames.erase(current_fd);
+                clients.erase(current_fd);
                 poll_fds.erase(poll_fds.begin() +
                                static_cast<std::ptrdiff_t>(i));
             } else {
