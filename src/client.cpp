@@ -8,6 +8,7 @@
 #include <sys/select.h>
 #include <sys/socket.h>
 #include <unistd.h>
+#include "unique_fd.h"
 
 bool send_all(int fd, const char* data, std::size_t length) {
     std::size_t sent = 0;
@@ -38,11 +39,14 @@ int main(int argc, char* argv[]) {
 
     const int port = std::atoi(argv[2]);
 
-    const int client_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (client_fd == -1) {
+    UniqueFd client_socket{socket(AF_INET, SOCK_STREAM, 0)};
+
+    if (!client_socket.valid()) {
         std::perror("socket");
         return 1;
     }
+
+    const int client_fd = client_socket.get();
 
     sockaddr_in server_addr {};
     server_addr.sin_family = AF_INET;
@@ -50,7 +54,6 @@ int main(int argc, char* argv[]) {
 
     if (inet_pton(AF_INET, argv[1], &server_addr.sin_addr) != 1) {
         std::cerr << "Invalid IPv4 address\n";
-        close(client_fd);
         return 1;
     }
 
@@ -58,7 +61,6 @@ int main(int argc, char* argv[]) {
                 reinterpret_cast<sockaddr*>(&server_addr),
                 sizeof(server_addr)) == -1) {
         std::perror("connect");
-        close(client_fd);
         return 1;
     }
 
@@ -127,7 +129,5 @@ int main(int argc, char* argv[]) {
             }
         }
     }
-
-    close(client_fd);
     return 0;
 }
