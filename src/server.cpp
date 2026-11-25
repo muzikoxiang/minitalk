@@ -11,6 +11,8 @@
 #include <string>
 #include <unordered_map>
 #include <cctype>
+#include "unique_fd.h"
+#include <utility>
 
 bool send_all(int fd, const char* data, std::size_t length) {
     std::size_t sent = 0;
@@ -34,6 +36,7 @@ bool send_all(int fd, const char* data, std::size_t length) {
 }
 
 struct ClientState {
+    UniqueFd socket;
     std::string nickname;
     std::string recv_buffer;
 };
@@ -102,17 +105,19 @@ int main(int argc, char* argv[]) {
 
     const int port = std::atoi(argv[1]);
 
-    const int listen_fd = socket(AF_INET, SOCK_STREAM, 0);
-    if (listen_fd == -1) {
+    UniqueFd listen_socket{socket(AF_INET, SOCK_STREAM, 0)};
+
+    if (!listen_socket.valid()) {
         std::perror("socket");
         return 1;
     }
+
+    const int listen_fd = listen_socket.get();
 
     int reuse_addr = 1;
     if (setsockopt(listen_fd, SOL_SOCKET, SO_REUSEADDR,
                    &reuse_addr, sizeof(reuse_addr)) == -1) {
         std::perror("setsockopt");
-        close(listen_fd);
         return 1;
     }
 
@@ -125,13 +130,11 @@ int main(int argc, char* argv[]) {
              reinterpret_cast<sockaddr*>(&server_addr),
              sizeof(server_addr)) == -1) {
         std::perror("bind");
-        close(listen_fd);
         return 1;
     }
 
     if (listen(listen_fd, SOMAXCONN) == -1) {
         std::perror("listen");
-        close(listen_fd);
         return 1;
     }
 
@@ -173,29 +176,38 @@ int main(int argc, char* argv[]) {
                     sockaddr_in client_addr {};
                     socklen_t client_addr_len = sizeof(client_addr);
 
-                    const int client_fd = accept(
-                        listen_fd,
-                        reinterpret_cast<sockaddr*>(&client_addr),
-                        &client_addr_len
-                    );
+                    UniqueFd client_socket{
+                        accept(
+                            listen_fd,
+                            reinterpret_cast<sockaddr*>(&client_addr),
+                            &client_addr_len
+                        )
+                    };
 
-                    if (client_fd == -1) {
+                    if (!client_socket.valid()) {
                         std::perror("accept");
                     } else {
+                        const int client_fd = client_socket.get();
+
                         char client_ip[INET_ADDRSTRLEN] {};
                         inet_ntop(AF_INET, &client_addr.sin_addr,
-                                  client_ip, sizeof(client_ip));
+                                client_ip, sizeof(client_ip));
 
-                        std::cout << "Client connected: "
-                                  << client_ip << ':'
-                                  << ntohs(client_addr.sin_port)
-                                  << ", fd = " << client_fd << '\n';
+                        clients.emplace(
+                            client_fd,
+                            ClientState{
+                                std::move(client_socket),
+                                "guest" + std::to_string(client_fd),
+                                ""
+                            }
+                        );
 
                         poll_fds.push_back({client_fd, POLLIN, 0});
-                        clients[client_fd] = ClientState{
-                            "guest" + std::to_string(client_fd),
-                            ""
-                        };
+
+                        std::cout << "Client connected: "
+                                << client_ip << ':'
+                                << ntohs(client_addr.sin_port)
+                                << ", fd = " << client_fd << '\n';
 
                         broadcast_message(
                             poll_fds,
@@ -310,16 +322,15 @@ int main(int argc, char* argv[]) {
             }
 
             if (should_close) {
-                close(current_fd);
+                poll_fds.erase(
+                    poll_fds.begin() + static_cast<std::ptrdiff_t>(i)
+                );
+                
                 clients.erase(current_fd);
-                poll_fds.erase(poll_fds.begin() +
-                               static_cast<std::ptrdiff_t>(i));
             } else {
                 ++i;
             }
         }
     }
-
-    close(listen_fd);
     return 0;
 }
