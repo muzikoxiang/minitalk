@@ -67,6 +67,33 @@ bool is_valid_nickname(const std::string& nickname) {
     return true;
 }
 
+bool nickname_in_use(
+    const std::unordered_map<int, ClientState>& clients,
+    int current_fd,
+    const std::string& nickname
+) {
+    for (const auto& [fd, client] : clients) {
+        if (fd != current_fd && client.nickname == nickname) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+std::string make_user_list(
+    const std::unordered_map<int, ClientState>& clients
+) {
+    std::string result = "System: online users (" +
+                         std::to_string(clients.size()) + ")\n";
+
+    for (const auto& [fd, client] : clients) {
+        result += " - " + client.nickname + '\n';
+    }
+
+    return result;
+}
+
 int main(int argc, char* argv[]) {
     if (argc != 2) {
         std::cerr << "Usage: ./minitalk_server <port>\n";
@@ -226,12 +253,26 @@ int main(int argc, char* argv[]) {
                             break;
                         }
 
+                        if (line == "/users") {
+                            const std::string users = make_user_list(clients);
+                            send_all(current_fd, users.data(), users.size());
+                            continue;
+                        }
+
                         if (line.rfind("/nick ", 0) == 0) {
                             const std::string new_nickname = line.substr(6);
 
                             if (!is_valid_nickname(new_nickname)) {
                                 const std::string error =
                                     "System: nickname must contain 1-16 letters, digits, or _\n";
+
+                                send_all(current_fd, error.data(), error.size());
+                                continue;
+                            }
+
+                            if (nickname_in_use(clients, current_fd, new_nickname)) {
+                                const std::string error =
+                                    "System: nickname is already in use\n";
 
                                 send_all(current_fd, error.data(), error.size());
                                 continue;
