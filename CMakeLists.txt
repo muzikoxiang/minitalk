@@ -11,3 +11,10 @@ add_executable(minitalk_client src/client.cpp)
 
 target_compile_options(minitalk_server PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_options(minitalk_client PRIVATE -Wall -Wextra -Wpedantic)
+
+add_executable(minitalk_epoll_server src/server_epoll.cpp)
+
+target_compile_options(
+    minitalk_epoll_server
+    PRIVATE -Wall -Wextra -Wpedantic
+)
