@@ -1,5 +1,6 @@
 #include "unique_fd.h"
 #include "database_worker.h"
+#include "redis_worker.h"
 
 #include <cstdlib>
 #include <cctype>
@@ -191,6 +192,9 @@ int main(int argc, char* argv[]) {
         db_password,
         "minitalk"
     );
+
+    RedisWorker redis_worker("127.0.0.1", 6379);
+
     std::cout << "MiniTalk epoll server listening on port "
               << port << '\n';
 
@@ -384,7 +388,13 @@ int main(int argc, char* argv[]) {
 
                                 const std::string old_nickname = client_it->second.nickname;
                                 client_it->second.nickname = new_nickname;
+                                if (!redis_worker.enqueueRemovePresence(old_nickname)) {
+                                    std::cerr << "[redis worker] failed to submit offline task\n";
+                                }
 
+                                if (!redis_worker.enqueueSetPresence(new_nickname, 300)) {
+                                    std::cerr << "[redis worker] failed to submit online task\n";
+                                }
                                 broadcast_message(
                                     epoll_fd.get(),
                                     clients,
@@ -472,6 +482,12 @@ int main(int argc, char* argv[]) {
             if (should_close) {
                 std::cout << "Client disconnected: "
                         << client_it->second.nickname << '\n';
+
+                if (!redis_worker.enqueueRemovePresence(
+                        client_it->second.nickname
+                    )) {
+                    std::cerr << "[redis worker] failed to submit offline task\n";
+                }
 
                 epoll_ctl(
                     epoll_fd.get(),
