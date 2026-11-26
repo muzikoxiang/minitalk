@@ -1,5 +1,7 @@
 #include "unique_fd.h"
+#include "database_worker.h"
 
+#include <cstdlib>
 #include <cctype>
 #include <arpa/inet.h>
 #include <cerrno>
@@ -176,6 +178,19 @@ int main(int argc, char* argv[]) {
     }
 
     std::unordered_map<int, ClientState> clients;
+    const char* db_password = std::getenv("MINITALK_DB_PASSWORD");
+
+    if (db_password == nullptr) {
+        std::cerr << "MINITALK_DB_PASSWORD is not set\n";
+        return 1;
+    }
+
+    DatabaseWorker database_worker(
+        "tcp://127.0.0.1:3306",
+        "minitalk_app",
+        db_password,
+        "minitalk"
+    );
     std::cout << "MiniTalk epoll server listening on port "
               << port << '\n';
 
@@ -386,6 +401,12 @@ int main(int argc, char* argv[]) {
                                 line + '\n';
 
                             broadcast_message(epoll_fd.get(), clients, message);
+                            if (!line.empty()) {
+                                database_worker.enqueueSaveMessage(
+                                    client_it->second.nickname,
+                                    line
+                                );
+                            }
                         }
                     } else if (received == 0) {
                         should_close = true;

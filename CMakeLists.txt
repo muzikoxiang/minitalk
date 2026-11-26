@@ -12,7 +12,12 @@ add_executable(minitalk_client src/client.cpp)
 target_compile_options(minitalk_server PRIVATE -Wall -Wextra -Wpedantic)
 target_compile_options(minitalk_client PRIVATE -Wall -Wextra -Wpedantic)
 
-add_executable(minitalk_epoll_server src/server_epoll.cpp)
+add_executable(
+    minitalk_epoll_server
+    src/server_epoll.cpp
+    src/database.cpp
+    src/database_worker.cpp
+)
 
 target_compile_options(
     minitalk_epoll_server
@@ -26,6 +31,7 @@ add_executable(
     minitalk_db_demo
     src/db_demo.cpp
     src/database.cpp
+    src/database_worker.cpp
 )
 
 target_include_directories(
@@ -41,4 +47,13 @@ target_link_libraries(
 target_compile_options(
     minitalk_db_demo
     PRIVATE -Wall -Wextra -Wpedantic
+)
+target_include_directories(
+    minitalk_epoll_server
+    PRIVATE ${MYSQLCPPCONN_INCLUDE_DIR}
+)
+
+target_link_libraries(
+    minitalk_epoll_server
+    PRIVATE ${MYSQLCPPCONN_LIBRARY}
 )
