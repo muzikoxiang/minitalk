@@ -2,6 +2,7 @@
 #include "database_worker.h"
 #include "redis_worker.h"
 
+#include <chrono>
 #include <cstdlib>
 #include <cctype>
 #include <arpa/inet.h>
@@ -17,6 +18,10 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
+
+constexpr int kPresenceTtlSeconds = 300;
+constexpr auto kPresenceRefreshInterval =
+    std::chrono::seconds(60);
 
 bool set_nonblocking(int fd) {
     const int flags = fcntl(fd, F_GETFL, 0);
@@ -39,6 +44,8 @@ struct ClientState {
     std::string nickname;
     std::string recv_buffer;
     std::string send_buffer;
+    bool presence_enabled = false;
+    std::chrono::steady_clock::time_point last_presence_refresh{};
 };
 
 bool update_client_interest(
@@ -205,7 +212,7 @@ int main(int argc, char* argv[]) {
             epoll_fd.get(),
             events,
             16,
-            -1
+            1000
         );
 
         if (event_count == -1) {
@@ -392,8 +399,15 @@ int main(int argc, char* argv[]) {
                                     std::cerr << "[redis worker] failed to submit offline task\n";
                                 }
 
-                                if (!redis_worker.enqueueSetPresence(new_nickname, 300)) {
+                                if (!redis_worker.enqueueSetPresence(
+                                        new_nickname,
+                                        kPresenceTtlSeconds
+                                    )) {
                                     std::cerr << "[redis worker] failed to submit online task\n";
+                                } else {
+                                    client_it->second.presence_enabled = true;
+                                    client_it->second.last_presence_refresh =
+                                        std::chrono::steady_clock::now();
                                 }
                                 broadcast_message(
                                     epoll_fd.get(),
@@ -498,6 +512,29 @@ int main(int argc, char* argv[]) {
 
                 clients.erase(current_fd);
             }
+        }
+        const auto now = std::chrono::steady_clock::now();
+
+        for (auto& [fd, client] : clients) {
+            if (!client.presence_enabled) {
+                continue;
+            }
+
+            if (now - client.last_presence_refresh <
+                kPresenceRefreshInterval) {
+                continue;
+            }
+
+            if (!redis_worker.enqueueSetPresence(
+                    client.nickname,
+                    kPresenceTtlSeconds
+                )) {
+                std::cerr << "[redis worker] failed to refresh presence for "
+                        << client.nickname << '\n';
+                continue;
+            }
+
+            client.last_presence_refresh = now;
         }
     }
 
