@@ -1,36 +1,26 @@
 # MiniTalk
 
-MiniTalk 是一个基于 Linux Socket 和 C++17 实现的命令行多客户端聊天室。
+一个基于 Linux / C++17 的命令行多人聊天室项目。
 
-项目从阻塞式 Echo Server 开始，逐步实现了 `select`、`poll` 和 `epoll LT` 多路复用版本，用于学习 TCP 通信、应用层协议、非阻塞 I/O、事件驱动模型和现代 C++ 资源管理。
+项目从阻塞式 Socket 通信逐步演进到 `poll`、`epoll`，并接入 MySQL 持久化和 Redis 在线状态管理。重点不只是“能聊天”，还包括非阻塞 I/O、事件驱动、RAII、线程任务队列、背压与服务端状态管理。
 
 ## 当前功能
 
-- 基于 TCP 的客户端和服务端通信
-- 基于 `poll` 的多客户端聊天室服务端
-- 基于 `epoll` LT 的多客户端非阻塞聊天室服务端
-- 客户端使用 `select` 同时监听键盘输入和服务端消息
-- 多客户端广播聊天
-- 昵称修改命令：`/nick <昵称>`
-- 在线用户查询命令：`/users`
-- 客户端退出命令：`/quit`
-- 使用换行符 `\n` 作为应用层消息边界
-- 为每个客户端维护独立接收缓冲区，处理 TCP 半包和粘包
-- epoll 版本使用非阻塞 socket
-- epoll 版本使用 `send_buffer` 和 `EPOLLOUT` 处理部分发送
-- 使用 `UniqueFd` 和 RAII 自动管理 socket 文件描述符
-- 服务端支持 `Ctrl+C` 和 `SIGTERM` 优雅退出
-
-## 技术栈
-
-- C++17
-- Linux Socket API
-- TCP/IP
-- `select`
-- `poll`
-- `epoll`
-- CMake
-- Git
+- 基于 TCP 的多人聊天室
+- `poll` 与 `epoll` 两个服务器版本
+- `epoll` 版本使用 Level Triggered（LT）模式
+- 非阻塞监听、`accept`、`recv`、`send`
+- 基于换行符 `\n` 的应用层消息协议
+- 正确处理半包、粘包、部分发送
+- `EPOLLOUT` 事件按需订阅，避免空转
+- 聊天广播
+- 自定义昵称、在线用户列表、退出命令
+- `UniqueFd` RAII 封装，自动关闭文件描述符
+- MySQL 异步写入聊天消息
+- 有界数据库任务队列，避免慢数据库导致内存无限积压
+- Redis 记录用户在线状态
+- Redis TTL 自动过期与定时续租
+- Redis、MySQL 操作均通过后台线程执行，避免直接阻塞 epoll 网络线程
 
 ## 项目结构
 
@@ -38,174 +28,310 @@ MiniTalk 是一个基于 Linux Socket 和 C++17 实现的命令行多客户端�
 minitalk/
 ├── CMakeLists.txt
 ├── README.md
-├── .gitignore
-├── src/
-│   ├── client.cpp             # 命令行客户端，使用 select 监听输入和服务端消息
-│   ├── server.cpp             # poll 多客户端聊天室服务端
-│   ├── server_blocking.cpp    # 阻塞式 Echo Server 学习版本
-│   ├── server_select.cpp      # select 多客户端 Echo Server 学习版本
-│   ├── server_poll.cpp        # poll 聊天室服务端备份版本
-│   ├── server_epoll.cpp       # epoll LT 非阻塞聊天室服务端
-│   └── unique_fd.h            # RAII 文件描述符管理类
-└── tests/
+├── sql/
+│   ├── 001_create_users.sql
+│   └── 002_create_messages.sql
+└── src/
+    ├── client.cpp                 # 聊天客户端
+    ├── server_blocking.cpp        # 阻塞式服务器学习版本
+    ├── server_select.cpp          # select 服务器学习版本
+    ├── server.cpp                 # poll 服务器
+    ├── server_epoll.cpp           # epoll 主服务器
+    ├── unique_fd.h                # 文件描述符 RAII 封装
+    ├── database.h / database.cpp  # MySQL 数据访问封装
+    ├── database_worker.h/.cpp     # MySQL 后台任务线程
+    ├── db_demo.cpp                # MySQL 功能验证程序
+    ├── redis_client.h/.cpp        # Redis 客户端封装
+    ├── redis_worker.h/.cpp        # Redis 后台任务线程
+    └── redis_demo.cpp             # Redis 功能验证程序
 ```
 
-## 构建环境
+## 架构
+
+```text
+多个客户端
+    │
+    ▼
+epoll 网络线程
+    │
+    ├── 接收、拆包、命令处理、广播
+    │
+    ├── DatabaseWorker 任务队列
+    │       └── 后台线程 → MySQL
+    │
+    └── RedisWorker 任务队列
+            └── 后台线程 → Redis
+```
+
+网络线程只负责网络 I/O 与聊天室内存状态，不直接执行 MySQL 或 Redis 的同步调用，避免慢查询或网络抖动卡住全部客户端。
+
+## 环境要求
 
 - Linux
-- 支持 C++17 的编译器，例如 g++
-- CMake 3.16 或更高版本
+- CMake >= 3.16
+- 支持 C++17 的编译器
+- MySQL Server
+- Redis Server
+- MySQL Connector/C++
+- hiredis
 
-## 编译
+Ubuntu / Debian 可安装依赖：
 
-在项目根目录执行：
+```bash
+sudo apt update
+sudo apt install build-essential cmake
+sudo apt install mysql-server libmysqlcppconn-dev
+sudo apt install redis-server libhiredis-dev
+```
+
+检查服务：
+
+```bash
+sudo systemctl status mysql --no-pager
+sudo systemctl status redis-server --no-pager
+```
+
+## 初始化数据库
+
+创建数据库和项目用户时，请自行设置强密码，不要把密码提交到仓库。
+
+```sql
+CREATE DATABASE minitalk
+    CHARACTER SET utf8mb4
+    COLLATE utf8mb4_0900_ai_ci;
+
+CREATE USER 'minitalk_app'@'localhost'
+    IDENTIFIED BY 'your_strong_password';
+
+GRANT ALL PRIVILEGES ON minitalk.* TO 'minitalk_app'@'localhost';
+
+FLUSH PRIVILEGES;
+```
+
+执行建表脚本：
+
+```bash
+mysql -u minitalk_app -p minitalk < sql/001_create_users.sql
+mysql -u minitalk_app -p minitalk < sql/002_create_messages.sql
+```
+
+当前聊天消息会关联 `users` 表中的用户。因此测试前至少插入测试用户：
+
+```sql
+INSERT INTO users (username, password_hash)
+VALUES
+    ('alice', 'development_only_placeholder'),
+    ('bob', 'development_only_placeholder');
+```
+
+> 当前 `/nick` 只是聊天室昵称，不是正式登录鉴权。密码哈希字段目前仅为后续登录功能预留。
+
+## 构建
 
 ```bash
 cmake -S . -B build
 cmake --build build
 ```
 
-## 运行
+构建完成后会生成：
 
-### 运行 poll 版本服务端
+```text
+build/minitalk_server
+build/minitalk_epoll_server
+build/minitalk_client
+build/minitalk_db_demo
+build/minitalk_redis_demo
+```
+
+## 运行聊天室
+
+### 1. 启动 epoll 服务器
+
+MySQL 密码只通过环境变量提供，不写入源码、Git 仓库或 README。
 
 ```bash
-./build/minitalk_server 8888
+read -s -p "Database password: " MINITALK_DB_PASSWORD
+echo
+export MINITALK_DB_PASSWORD
+
+./build/minitalk_epoll_server
 ```
 
-### 运行 epoll LT 版本服务端
+### 2. 启动客户端
+
+另开一个终端：
 
 ```bash
-./build/minitalk_epoll_server 8888
+cd ~/minitalk
+./build/minitalk_client
 ```
 
-同一时间只能启动一个服务端版本并监听同一个端口。
+再开其他终端启动更多客户端。
 
-### 启动客户端
+### 3. 聊天命令
 
-在其他终端启动多个客户端：
+```text
+/nick alice     修改昵称
+/users          查看当前聊天室连接用户
+/quit           退出聊天室
+```
+
+普通文本会广播给全部客户端。
+
+建议在数据库中已有 `alice`、`bob` 后，分别使用：
+
+```text
+/nick alice
+/nick bob
+```
+
+普通消息会被异步写入 MySQL；昵称设置后，Redis 中会记录对应用户的在线状态。
+
+## 验证 MySQL 消息持久化
 
 ```bash
-./build/minitalk_client 127.0.0.1 8888
+read -s -p "Database password: " MINITALK_DB_PASSWORD
+echo
+export MINITALK_DB_PASSWORD
+
+./build/minitalk_db_demo alice "Message saved from C++"
+
+unset MINITALK_DB_PASSWORD
 ```
 
-## 使用方式
+该程序会写入一条消息并输出该用户的历史消息。
 
-连接成功后，直接输入文本并按回车即可发送聊天消息：
+## 验证 Redis 在线状态
+
+昵称修改为 `alice` 后：
+
+```bash
+redis-cli GET minitalk:presence:alice
+redis-cli TTL minitalk:presence:alice
+```
+
+预期输出：
 
 ```text
-hello
+"online"
+(integer) 300
 ```
 
-支持的命令：
+用户正常退出后：
+
+```bash
+redis-cli GET minitalk:presence:alice
+```
+
+预期：
 
 ```text
-/nick alice    修改昵称为 alice
-/users         查看当前在线用户
-/quit          退出聊天室
+(nil)
 ```
 
-## 架构说明
+在线用户的 Redis 状态规则：
+
+- `/nick alice`：写入 `minitalk:presence:alice = online`
+- TTL 为 300 秒
+- epoll 服务器每 60 秒自动续租
+- `/quit` 或连接断开：异步删除在线状态
+- 即使服务端异常退出，TTL 到期后也会自动清理残留状态
+
+## 实现要点
+
+### 非阻塞与 epoll
+
+- 监听 socket 与客户端 socket 均设置为非阻塞
+- `recv()` 持续读取，直到返回 `EAGAIN` / `EWOULDBLOCK`
+- `send()` 可能只发送部分数据，剩余数据保存在 `send_buffer`
+- 仅当 `send_buffer` 非空时监听 `EPOLLOUT`
+- `EPOLLOUT` 到达后继续发送，缓冲区清空后移除 `EPOLLOUT` 兴趣
+
+### 应用层协议
+
+TCP 是字节流协议，不保证一次 `send()` 对应一次 `recv()`。
+
+MiniTalk 使用换行符作为消息边界：
 
 ```text
-标准输入
-   │
-   ▼
-MiniTalk Client
-   ├── select 同时监听 stdin 和服务端 socket
-   ├── stdin 可读时，发送用户输入
-   └── socket 可读时，立即显示服务端广播消息
-   │
-   ▼ TCP
-   │
-MiniTalk Server
-   ├── poll 版本
-   │   ├── poll 监听 listen_fd 和全部 client_fd
-   │   └── 线性扫描就绪事件
-   │
-   └── epoll LT 版本
-       ├── epoll 监听 listen_fd 和全部 client_fd
-       ├── 客户端 socket 使用非阻塞 I/O
-       ├── EPOLLIN 读取数据直到 EAGAIN
-       ├── 每个客户端维护 recv_buffer
-       ├── 完整消息写入所有客户端的 send_buffer
-       └── EPOLLOUT 发送数据直到 EAGAIN 或缓冲区清空
+一条消息\n
 ```
 
-## 协议设计
+服务端将未处理数据保存在 `recv_buffer`，循环查找 `\n` 并逐条处理，因此能处理：
 
-MiniTalk 使用基于文本的行协议。
+- 半包
+- 粘包
+- 一次接收多条消息
+- 一条消息分多次接收
 
-客户端发送的每条消息都以换行符 `\n` 结尾：
+### 数据库任务队列与背压
+
+MySQL 操作不在 epoll 线程直接执行：
 
 ```text
-/nick alice\n
-hello world\n
-/users\n
+epoll 网络线程
+    │
+    └── enqueueSaveMessage(...)
+            │
+            ▼
+      DatabaseWorker 队列
+            │
+            ▼
+      MySQL 后台线程
 ```
 
-服务端不会把一次 `recv()` 直接视为一条完整消息，而是先追加到该客户端的 `recv_buffer`，再按 `\n` 拆分完整消息。因此可以正确处理 TCP 半包和粘包问题。
+任务队列最大容量为 1000：
 
-## epoll 写事件管理
+- 队列未满：消息正常异步落库
+- 队列满或后台线程停止：聊天仍会广播，但本条消息不持久化，并在服务端打印告警
 
-非阻塞 socket 的 `send()` 不保证一次发完所有数据。
+这是“实时通信优先于慢存储”的明确设计取舍。
 
-MiniTalk 的 epoll 版本为每个客户端维护 `send_buffer`：
+### Redis 在线状态
+
+Redis 同样由 `RedisWorker` 后台线程处理：
 
 ```text
-聊天消息产生
-    ↓
-追加到各客户端 send_buffer
-    ↓
-通过 epoll_ctl 注册 EPOLLOUT
-    ↓
-socket 可写时，epoll_wait 返回 EPOLLOUT
-    ↓
-循环 send，直到发送缓冲区清空或返回 EAGAIN
-    ↓
-发送缓冲区清空后移除 EPOLLOUT
+改昵称 → 删除旧昵称状态 → 写入新昵称 online + TTL
+断开连接 → 删除在线状态
+服务器运行中 → 定时续租 TTL
 ```
 
-仅在 `send_buffer` 非空时关注 `EPOLLOUT`，避免 socket 持续可写时造成 CPU 空转。
+## 已知限制
 
-## 资源管理
-
-项目中的 `UniqueFd` 负责管理 socket 文件描述符：
-
-- 构造时接管 fd 所有权
-- 析构时自动执行 `close(fd)`
-- 禁止拷贝，避免同一个 fd 被重复关闭
-- 支持移动语义，允许安全转移 fd 所有权
-
-服务端监听 socket、epoll fd 和客户端 socket 均通过 RAII 管理。
-
-## 测试场景
-
-| 场景 | 预期结果 |
-|---|---|
-| 单个客户端发送消息 | 客户端收到服务端广播消息 |
-| 多个客户端保持连接 | 所有客户端即时收到广播消息 |
-| 一个客户端退出 | 其他客户端仍可继续聊天 |
-| 执行 `/nick alice` | 昵称修改成功并通知其他用户 |
-| 两个客户端使用相同昵称 | 服务端拒绝重复昵称 |
-| 执行 `/users` | 返回当前在线用户列表 |
-| 执行 `/quit` | 当前客户端退出，服务端继续运行 |
-| 服务端按 `Ctrl+C` | 服务端退出，客户端感知连接关闭 |
-| 长消息发送 | epoll 版本通过 send_buffer 和 EPOLLOUT 继续发送剩余数据 |
-
-## 当前限制
-
-- epoll 版本当前使用 LT 水平触发，尚未实现 ET 边缘触发。
-- `send_buffer` 尚未设置最大长度，极慢客户端可能造成内存占用增长。
-- 聊天记录和用户信息仅保存在内存中，服务端重启后会丢失。
-- 暂未实现用户认证、MySQL、Redis、线程池和 HTTP API。
-- 当前项目定位为学习型 Linux C++ 网络编程项目，不宣称具备生产级高并发能力。
+- 当前没有注册、登录和正式密码校验
+- `password_hash` 尚未接入 Argon2 / bcrypt 等安全哈希
+- `/nick` 不等于身份认证
+- 数据库任务失败目前仅记录日志，不做重试或死信队列
+- Redis 在线状态只代表当前聊天室服务进程维护的状态
+- 没有 TLS、HTTP API、日志系统、配置文件和监控系统
+- 目前为单机学习项目，未实现多进程、多实例部署
+- epoll 当前使用 LT 模式，未实现 ET 模式
+- MySQL / Redis 连接参数仍有部分写死在源码中，后续应统一迁移到环境变量或配置文件
 
 ## 后续计划
 
-- 为 `send_buffer` 增加长度限制和慢客户端处理策略
-- 接入 MySQL 保存用户和聊天记录
-- 接入 Redis 保存在线状态或会话信息
-- 增加线程池处理耗时业务任务
-- 增加日志、配置文件和自动化测试
-- 研究 epoll ET 边缘触发模式
+- [ ] 使用 Argon2 或 bcrypt 实现安全密码哈希
+- [ ] 实现注册、登录与会话管理
+- [ ] 通过配置文件或环境变量统一管理服务配置
+- [ ] 增加聊天历史查询
+- [ ] 增加单元测试与压力测试
+- [ ] 增加日志与错误指标
+- [ ] 实现 Redis 连接重连策略
+- [ ] 研究 epoll ET 模式与更高并发下的设计取舍
+
+## 学习收获
+
+这个项目覆盖了以下 C++ 后端基础能力：
+
+- Linux Socket / TCP 通信
+- `select`、`poll`、`epoll`
+- 非阻塞 I/O
+- Reactor 事件驱动思想
+- RAII 与资源管理
+- 线程、互斥锁、条件变量
+- 生产者消费者队列
+- 背压
+- MySQL 基础与预处理语句
+- Redis TTL、Hash、在线状态
+- CMake 与 Git 基本工作流
