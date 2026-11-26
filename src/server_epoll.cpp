@@ -401,11 +401,14 @@ int main(int argc, char* argv[]) {
                                 line + '\n';
 
                             broadcast_message(epoll_fd.get(), clients, message);
-                            if (!line.empty()) {
-                                database_worker.enqueueSaveMessage(
+                            if (!line.empty() &&
+                                !database_worker.enqueueSaveMessage(
                                     client_it->second.nickname,
                                     line
-                                );
+                                )) {
+                                std::cerr
+                                    << "[db worker] task queue is full or stopping; "
+                                    << "message was not persisted\n";
                             }
                         }
                     } else if (received == 0) {

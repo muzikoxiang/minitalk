@@ -5,6 +5,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <cstddef>
 
 class DatabaseWorker {
 public:
@@ -17,7 +18,7 @@ public:
     DatabaseWorker(const DatabaseWorker&) = delete;
     DatabaseWorker& operator=(const DatabaseWorker&) = delete;
 
-    void enqueueSaveMessage(std::string username, std::string content);
+    bool enqueueSaveMessage(std::string username, std::string content);
 
 private:
     struct SaveTask {
@@ -37,5 +38,6 @@ private:
     std::deque<SaveTask> tasks_;
     bool stopping_ = false;
 
+    static constexpr std::size_t kMaxQueueSize = 1000;
     std::thread worker_thread_;
 };

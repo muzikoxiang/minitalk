@@ -30,19 +30,24 @@ DatabaseWorker::~DatabaseWorker() {
     }
 }
 
-void DatabaseWorker::enqueueSaveMessage(std::string username,
+bool DatabaseWorker::enqueueSaveMessage(std::string username,
                                         std::string content) {
     {
         std::lock_guard<std::mutex> lock(mutex_);
 
         if (stopping_) {
-            throw std::runtime_error("DatabaseWorker is stopping");
+            return false;
+        }
+
+        if (tasks_.size() >= kMaxQueueSize) {
+            return false;
         }
 
         tasks_.push_back({std::move(username), std::move(content)});
     }
 
     condition_.notify_one();
+    return true;
 }
 
 void DatabaseWorker::run() {
